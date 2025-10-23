@@ -33,19 +33,24 @@ EARLY_MENOPAUSE_CRITERIA = [
 
 #3. Retrieve Data from PubMed
 def fetch_pubmed_articles(query, max_results=100):
-    """
-    Fetches articles from PubMed based on the query.
-    """
     import urllib.request
     import xml.etree.ElementTree as ET
+    from urllib.parse import quote
 
+    query_encoded = query.replace(' ', '+')
+    
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-    params = f"?db=pubmed&term={query}&retmax={max_results}&retmode=xml"
-    response = urllib.request.urlopen(base_url + params)
-    tree = ET.parse(response)
-    root = tree.getroot()
-    id_list = [id.text for id in root.findall(".//Id")]
-    return id_list
+    params = f"?db=pubmed&term={query_encoded}&retmax={max_results}&retmode=xml"
+    
+    try:
+        response = urllib.request.urlopen(base_url + params)
+        tree = ET.parse(response)
+        root = tree.getroot()
+        id_list = [id.text for id in root.findall(".//Id")]
+        return id_list
+    except Exception as e:
+        print(f"Error fetching articles: {e}")
+        return []
 
 def parse_pubmed_article(pmid):
     """
