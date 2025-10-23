@@ -1,0 +1,171 @@
+#1. Install and Import Dependencies
+# Install required packages (if not already installed)
+# pip install pubmed-parser pandas numpy scikit-learn nltk spacy
+
+import pandas as pd
+import numpy as np
+from pubmed_parser import parse_pubmed_xml
+import nltk
+from nltk.tokenize import sent_tokenize
+import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+import json
+from datetime import datetime
+
+#2. Define Search Parameters
+# Target health conditions
+HEALTH_CONDITIONS = [
+    "cardiovascular disease", "stroke", "myocardial infarction",
+    "osteoporosis", "fracture risk",
+    "dementia", "Alzheimer's disease",
+    "breast cancer",
+    "vasomotor symptoms", "cognitive changes", "quality of life"
+]
+
+# Key risk measures
+RISK_MEASURES = ["OR", "HR", "RR", "odds ratio", "hazard ratio", "relative risk"]
+
+# Criteria for early menopause
+EARLY_MENOPAUSE_CRITERIA = [
+    "premature ovarian insufficiency", "early menopause", "menopause before 45"
+]
+
+#3. Retrieve Data from PubMed
+def fetch_pubmed_articles(query, max_results=100):
+    """
+    Fetches articles from PubMed based on the query.
+    """
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    params = f"?db=pubmed&term={query}&retmax={max_results}&retmode=xml"
+    response = urllib.request.urlopen(base_url + params)
+    tree = ET.parse(response)
+    root = tree.getroot()
+    id_list = [id.text for id in root.findall(".//Id")]
+    return id_list
+
+def parse_pubmed_article(pmid):
+    """
+    Extracts metadata and text from a PubMed article by PMID.
+    """
+    # Use pubmed-parser to extract data
+    article = parse_pubmed_xml(f"{pmid}.xml")  # Assumes the file is downloaded
+    return {
+        "pmid": pmid,
+        "title": article["title"],
+        "abstract": article["abstract"],
+        "publication_year": article["pubdate"][:4],
+        "journal": article["journal"],
+    }
+
+#4. Filter Relevant Articles
+def is_relevant_article(abstract):
+    """
+    Checks if the article is relevant to the study topic.
+    """
+    nlp = spacy.load("en_core_web_sm")
+    doc = nlp(abstract.lower())
+
+    # Check for key terms
+    has_condition = any(cond in abstract.lower() for cond in HEALTH_CONDITIONS)
+    has_menopause = any(term in abstract.lower() for term in EARLY_MENOPAUSE_CRITERIA)
+    has_risk = any(measure in abstract.lower() for measure in RISK_MEASURES)
+
+    return has_condition and has_menopause and has_risk
+
+#5. Extract Risk Measures
+def extract_risk_measures(text):
+    """
+    Extracts risk measures (OR, HR, RR) and their 95% CI.
+    """
+    patterns = {
+        "OR": r"OR\s*[:=]\s*(\d+\.?\d*)\s*\(95%\s*CI\s*(\d+\.?\d*)–(\d+\.?\d*)\)",
+        "HR": r"HR\s*[:=]\s*(\d+\.?\d*)\s*\(95%\s*CI\s*(\d+\.?\d*)–(\d+\.?\d*)\)",
+        "RR": r"RR\s*[:=]\s*(\d+\.?\d*)\s*\(95%\s*CI\s*(\d+\.?\d*)–(\d+\.?\d*)\)",
+    }
+
+    results = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text)
+        if match:
+            results[key] = {
+                "value": float(match.group(1)),
+                "ci_lower": float(match.group(2)),
+                "ci_upper": float(match.group(3)),
+            }
+    return results
+
+#6. Assess Study Quality
+def assess_study_quality(abstract):
+    """
+    Evaluates study quality using a hierarchical model and bias risk assessment.
+    """
+    # Hierarchical model (simplified)
+    if "randomized controlled trial" in abstract.lower():
+        hierarchy_level = 1
+    elif "cohort study" in abstract.lower():
+        hierarchy_level = 2
+    elif "case-control" in abstract.lower():
+        hierarchy_level = 3
+    else:
+        hierarchy_level = 4
+
+    # Bias risk assessment (simplified)
+    bias_risk = {
+        "selection_bias": "low" if "randomized" in abstract.lower() else "high",
+        "measurement_bias": "low" if "blinded" in abstract.lower() else "moderate",
+        "confounding": "low" if "adjusted for" in abstract.lower() else "high",
+    }
+
+    return {
+        "hierarchy_level": hierarchy_level,
+        "bias_risk": bias_risk,
+    }
+
+#7. Build Structured Dataset
+def build_dataset(pmid_list):
+    """
+    Aggregates all data into a single DataFrame.
+    """
+    data = []
+    for pmid in pmid_list:
+        try:
+            article = parse_pubmed_article(pmid)
+            if not is_relevant_article(article["abstract"]):
+                continue
+
+            risk_measures = extract_risk_measures(article["abstract"])
+            quality = assess_study_quality(article["abstract"])
+
+            row = {
+                "pmid": pmid,
+                "title": article["title"],
+                "publication_year": article["publication_year"],
+                "journal": article["journal"],
+                **risk_measures,
+                "hierarchy_level": quality["hierarchy_level"],
+                **quality["bias_risk"],
+            }
+            data.append(row)
+        except Exception as e:
+            print(f"Error processing PMID {pmid}: {e}")
+
+    return pd.DataFrame(data)
+
+#8. Run the Pipeline
+if __name__ == "__main__":
+    # Construct query
+    query = " ".join(EARLY_MENOPAUSE_CRITERIA + HEALTH_CONDITIONS)
+
+    # Fetch PMIDs
+    pmid_list = fetch_pubmed_articles(query, max_results=50)
+
+    # Build dataset
+    dataset = build_dataset(pmid_list)
+
+    # Save results
+    dataset.to_csv("early_menopause_risk_dataset.csv", index=False)
+    print("Dataset saved to 'early_menopause_risk_dataset.csv'")
