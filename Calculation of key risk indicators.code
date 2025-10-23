@@ -1,0 +1,117 @@
+import pandas as pd
+from statsmodels.stats.contingency_tables import Table2x2
+import numpy as np
+
+# --- Prepared Data ---
+# Data for the 'Early Menopause' group (under 50 years)
+# Total group size = 300
+# Recalculated Healthy Count: 300 - 38 - 42 - 16 - 17 = 187
+early_menopause_data = {
+    'Group': ['Early Menopause'] * 5,
+    'Outcome': ['Osteoporosis', 'Cardiovascular diseases', 'Dementia', 'Lung cancer', 'Healthy'],
+    'Count': [38, 42, 16, 17, 187]  # Using the calculated value for Healthy
+}
+
+# Data for the 'Normal Menopause' group (after 50 years)
+# Total group size = 300
+normal_menopause_data = {
+    'Group': ['Normal Menopause'] * 5,
+    'Outcome': ['Osteoporosis', 'Cardiovascular diseases', 'Dementia', 'Lung cancer', 'Healthy'],
+    'Count': [16, 22, 7, 8, 247]
+}
+
+# Combine data and create DataFrame
+df_early = pd.DataFrame(early_menopause_data)
+df_normal = pd.DataFrame(normal_menopause_data)
+df_combined = pd.concat([df_early, df_normal])
+
+# --- Function to Calculate OR and RR ---
+def calculate_risk_ratios(input_df: pd.DataFrame, outcome: str, reference_group: str = 'Normal Menopause', exposure_group: str = 'Early Menopause'):
+    """
+    Calculates the Odds Ratio (OR) and Relative Risk (RR) for a specified outcome.
+
+    Args:
+        input_df (pd.DataFrame): The DataFrame containing the data.
+        outcome (str): The name of the outcome (e.g., 'Osteoporosis').
+        reference_group (str): The name of the control group (usually 'Normal Menopause').
+        exposure_group (str): The name of the exposed group (usually 'Early Menopause').
+
+    Returns:
+        dict: A dictionary containing the calculated OR, its CI, and RR, or None if calculation is impossible.
+    """
+    try:
+        # Filter data for the specific outcome
+        df_outcome = input_df[input_df['Outcome'] == outcome]
+
+        # Create the 2x2 contingency table (a, b, c, d)
+        # a = exposure_group, outcome
+        # b = exposure_group, Healthy
+        # c = reference_group, outcome
+        # d = reference_group, Healthy
+
+        a = df_outcome[df_outcome['Group'] == exposure_group]['Count'].sum()
+        b = input_df[(input_df['Group'] == exposure_group) & (input_df['Outcome'] == 'Healthy')]['Count'].sum()
+        c = df_outcome[df_outcome['Group'] == reference_group]['Count'].sum()
+        d = input_df[(input_df['Group'] == reference_group) & (input_df['Outcome'] == 'Healthy')]['Count'].sum()
+
+        # Check for non-negative values and division by zero
+        if not all(val >= 0 for val in [a, b, c, d]):
+            print(f"Warning: Non-negative values not found for outcome '{outcome}'.")
+            return None
+        if (b == 0) or (d == 0) or ((a + b) == 0) or ((c + d) == 0):
+            print(f"Warning: Cannot calculate RR/OR for outcome '{outcome}' due to zero values.")
+            return None
+
+        # Calculate OR using statsmodels Table2x2
+        contingency_values = np.array([[a, b], [c, d]])
+        table2x2 = Table2x2(contingency_values)
+        odds_ratio = table2x2.oddsratio
+        odds_ratio_ci = table2x2.oddsratio_confint()
+
+        # Calculate RR
+        # RR = (a / (a + b)) / (c / (c + d))
+        risk_a_b = a / (a + b) if (a + b) > 0 else 0
+        risk_c_d = c / (c + d) if (c + d) > 0 else 0
+        relative_risk = risk_a_b / risk_c_d if risk_c_d > 0 else np.inf # Infinite risk if control incidence is zero
+
+        return {
+            "outcome": outcome,
+            "odds_ratio": odds_ratio,
+            "odds_ratio_ci_lower": odds_ratio_ci[0],
+            "odds_ratio_ci_upper": odds_ratio_ci[1],
+            "relative_risk": relative_risk,
+            "notes": "Confidence interval for Relative Risk is not directly computed by this simplified function."
+        }
+
+    except Exception as e:
+        print(f"Error calculating for outcome '{outcome}': {e}")
+        return None
+
+# --- Perform Calculations for all Outcomes ---
+outcomes_to_calculate = ['Osteoporosis', 'Cardiovascular diseases', 'Dementia', 'Lung cancer']
+results = []
+
+for outcome in outcomes_to_calculate:
+    # Check if required data points exist for calculation within the df_combined DataFrame
+    if not (df_combined[(df_combined['Group'] == 'Early Menopause') & (df_combined['Outcome'] == outcome)]['Count'].sum() > 0 and
+            df_combined[(df_combined['Group'] == 'Normal Menopause') & (df_combined['Outcome'] == outcome)]['Count'].sum() > 0 and
+            df_combined[(df_combined['Group'] == 'Early Menopause') & (df_combined['Outcome'] == 'Healthy')]['Count'].sum() > 0 and
+            df_combined[(df_combined['Group'] == 'Normal Menopause') & (df_combined['Outcome'] == 'Healthy')]['Count'].sum() > 0):
+        print(f"Skipping calculation for '{outcome}' due to missing data points for one of the groups.")
+        continue
+
+    risk_ratios = calculate_risk_ratios(df_combined, outcome) # Pass df_combined here
+    if risk_ratios:
+        results.append(risk_ratios)
+
+# --- Display Results ---
+print("\nNote: OR (Odds Ratio) compares the odds of the outcome. RR (Relative Risk) compares the probability (incidence proportion).")
+print("The Confidence Interval (CI) for OR shows the range where the true OR value likely lies.")
+print("Values > 1 indicate an increased risk in the 'Early Menopause' group.\n")
+
+for result in results:
+    print(f"Outcome: {result['outcome']}")
+    print(f"  Odds Ratio (OR): {result['odds_ratio']:.3f}")
+    print(f"  95% CI for OR: [{result['odds_ratio_ci_lower']:.3f}, {result['odds_ratio_ci_upper']:.3f}]")
+    print(f"  Relative Risk (RR): {result['relative_risk']:.3f}")
+    print("-" * 40)
